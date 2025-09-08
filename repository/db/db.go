@@ -3,12 +3,14 @@ package db
 import (
 	"context"
 	"feature-flag-2/models"
+	"github.com/hashicorp/golang-lru/v2/expirable"
 
 	"gopkg.in/reform.v1"
 )
 
 type RepoFlagDB struct {
-	db *reform.DB
+	db    *reform.DB
+	cache *expirable.LRU[string, models.Flag]
 }
 
 func NewRepoFlagDB(db *reform.DB) *RepoFlagDB {

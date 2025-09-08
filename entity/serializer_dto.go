@@ -16,7 +16,7 @@ func NewFlagResponse(flag models.Flag) *FlagResponse {
 
 type ListOfFlagResponse struct {
 	Body struct {
-		Flags []models.Flag `json:"flag"`
+		Flags []models.Flag `json:"flags"`
 	}
 }
 

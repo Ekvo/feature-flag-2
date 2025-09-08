@@ -6,16 +6,19 @@ import (
 	"errors"
 	"feature-flag-2/adapter/humafiberv3"
 	"feature-flag-2/entity"
+	_ "feature-flag-2/migrations"
 	"feature-flag-2/models"
 	mycache "feature-flag-2/repository/cache"
 	mydb "feature-flag-2/repository/db"
 	"feature-flag-2/service"
+	"flag"
 	"fmt"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cache"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	_ "github.com/jackc/pgx/stdlib"
+	"github.com/pressly/goose/v3"
 	"gopkg.in/reform.v1"
 	"gopkg.in/reform.v1/dialects/postgresql"
 	"log"
@@ -24,9 +27,16 @@ import (
 	"time"
 )
 
+// Флаги командной строки
+var (
+	action  = flag.String("action", "down", "Действие: up, down, up-to, down-to, status")
+	version = flag.Int64("version", 0, "Версия миграции (для up-to, down-to)")
+)
+
 var ErrMainFlagNamesNotEqual = errors.New("flag name from param not equal falg name from body")
 
 func main() {
+	ctx := context.Background()
 	dsn := "postgres://ekvo:qwert12345@localhost/ekvodb?sslmode=disable"
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -37,6 +47,42 @@ func main() {
 		log.Printf("main: db.Ping error - {%v}", err)
 		return
 	}
+
+	flag.Parse()
+	// Логируем выбранный action
+	log.Printf("▶️  Выбрано действие: %s", *action)
+
+	switch *action {
+	case "up":
+		if err := goose.UpContext(ctx, db, "migrations"); err != nil {
+			log.Printf("main: goose.Up err - {%v}", err)
+			return
+		}
+	case "down":
+		if err := goose.DownContext(ctx, db, "migrations"); err != nil {
+			log.Printf("main: goose.Down err - {%v}", err)
+			return
+		}
+	case "up-to":
+		if *version == 0 {
+			log.Printf("main: goose.UpTo err - {%v}", err)
+			return
+		}
+		if err := goose.UpToContext(ctx, db, "migrations", *version); err != nil {
+			log.Printf("main: goose.UpTo err - {%v}", err)
+			return
+		}
+	case "down-to":
+		if *version == 0 {
+			log.Printf("main: goose.DownTo err - {%v}", err)
+			return
+		}
+		if err := goose.DownToContext(ctx, db, "migrations", *version); err != nil {
+			log.Printf("main: goose.DownTo err - {%v}", err)
+			return
+		}
+	}
+
 	reformDB := reform.NewDB(db, postgresql.Dialect, reform.NewPrintfLogger(log.Printf))
 	repoDB := mydb.NewRepoFlagDB(reformDB)
 	lru := expirable.NewLRU[string, models.Flag](1000, nil, 5*time.Minute)
@@ -46,13 +92,27 @@ func main() {
 	// Create a new Fiber app
 	app := fiber.New()
 	fcache := cache.New(cache.Config{
-		Expiration:   30 * time.Minute,
+		Expiration:   5 * time.Minute,
 		CacheControl: true,
 		Methods:      []string{"GET"},
 	})
 	app.Group("/flags").Use(fcache)
 
-	api := humafiberv3.New(app, huma.DefaultConfig("My API", "1.0.0"))
+	api := humafiberv3.New(app, huma.DefaultConfig("feature Flags API", "1.0.0"))
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-list-of-flags",
+		Method:      "PUT",
+		Path:        "/flags/migrations",
+		Summary:     "get list of flags and cached",
+	}, func(ctx context.Context, input *struct{}) (*entity.ListOfFlagResponse, error) {
+		flags, err := serviceFlag.RetrieveListOfAllFlags(ctx)
+		if err != nil {
+			return nil, huma.Error404NotFound("empty list of flags", err)
+		}
+
+		return flags, nil
+	})
 
 	huma.Register(api, huma.Operation{
 		OperationID: "get-list-of-flags",
@@ -121,7 +181,7 @@ func main() {
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "get-flag-by-name",
+		OperationID: "put-update-flag-by-name",
 		Method:      "PUT",
 		Path:        "/flag/{name}",
 		Summary:     "get flag name from param and return flag",
@@ -143,7 +203,7 @@ func main() {
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "get-flag-by-name",
+		OperationID: "delete-flag-by-name",
 		Method:      "DELETE",
 		Path:        "/flag/{name}",
 		Summary:     "get flag name from param and return flag",
