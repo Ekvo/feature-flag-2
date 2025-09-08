@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"feature-flag-2/adapter/humafiberv3"
 	"feature-flag-2/entity"
 	"feature-flag-2/models"
@@ -19,37 +20,14 @@ import (
 	"gopkg.in/reform.v1/dialects/postgresql"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// GreetingOutput represents the response structure
-type GreetingOutput struct {
-	Body struct {
-		Message string `json:"message" example:"Hello, world!"`
-	}
-}
-
-type MyData struct {
-	Data        string `json:"data"`
-	DefaultData string `json:"default_data"`
-}
-
-type MessageDefault struct {
-	Body struct {
-		Some struct {
-			X int `json:"its_int"`
-		} `json:"some"`
-
-		Data string `json:"default_data"`
-	}
-}
-
-type MessageStandart struct {
-	Data string `json:"data"`
-}
+var ErrMainFlagNamesNotEqual = errors.New("flag name from param not equal falg name from body")
 
 func main() {
-	dsn := "postgres://manager:qwert12345@localhost/manager?sslmode=disable"
+	dsn := "postgres://ekvo:qwert12345@localhost/ekvodb?sslmode=disable"
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Fatal("Failed to connect to database: ", err)
@@ -72,27 +50,38 @@ func main() {
 		CacheControl: true,
 		Methods:      []string{"GET"},
 	})
-	app.Group("/greetin").Use(fcache)
+	app.Group("/flags").Use(fcache)
 
-	config := huma.DefaultConfig("My API", "1.0.0")
-	api := humafiberv3.New(app, config)
+	api := humafiberv3.New(app, huma.DefaultConfig("My API", "1.0.0"))
 
-	// Register a GET operation
 	huma.Register(api, huma.Operation{
 		OperationID: "get-list-of-flags",
 		Method:      "GET",
 		Path:        "/flags",
 		Summary:     "get list of flags and cached",
 	}, func(ctx context.Context, input *struct{}) (*entity.ListOfFlagResponse, error) {
-		flags, err := repoDB.ListOfAllFkags(ctx)
+		flags, err := serviceFlag.RetrieveListOfAllFlags(ctx)
 		if err != nil {
-			return nil, err
+			return nil, huma.Error404NotFound("empty list of flags", err)
 		}
 
-		resp := &entity.ListOfFlagResponse{}
-		resp.Body.Flags = flags
+		return flags, nil
+	})
 
-		return resp, nil
+	huma.Register(api, huma.Operation{
+		OperationID: "post-list-of-flags",
+		Method:      "POST",
+		Path:        "/flags",
+		Summary:     "get list of flags by names and cached",
+	}, func(ctx context.Context, input *struct {
+		Body entity.FlagNamesDecode `json:"body"`
+	}) (*entity.ListOfFlagResponse, error) {
+		flagNames := input.Body
+		flagsByNames, err := serviceFlag.RetrieveListOfFlagsByNames(ctx, flagNames.FlagNames)
+		if err != nil {
+			return nil, huma.Error404NotFound("empty list of flags", err)
+		}
+		return flagsByNames, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -103,32 +92,71 @@ func main() {
 		Summary:       "create a new flag",
 	}, func(ctx context.Context, input *struct {
 		Body models.Flag `json:"body"`
-	}) (*struct{ Body struct{} }, error) {
+	}) (*entity.MessageResponse, error) {
 		flag := input.Body
-
-		if err := serviceFlag.CreateNewFlag(ctx, flag); err != nil {
-			return nil, huma.NewError(http.StatusConflict, err.Error())
+		msg, err := serviceFlag.CreateNewFlag(ctx, flag)
+		if err != nil {
+			return nil, huma.NewError(http.StatusConflict, "flag was not created", err)
 		}
-
-		return &struct{ Body struct{} }{}, nil
+		return msg, nil
 	})
 
-	// Register a GET operation
 	huma.Register(api, huma.Operation{
-		OperationID: "get-greeting",
+		OperationID: "get-flag-by-name",
 		Method:      "GET",
-		Path:        "/greet/{name}",
-		Summary:     "Cached greeting",
+		Path:        "/flag/{name}",
+		Summary:     "get flag name from param and return flag",
 	}, func(ctx context.Context, input *struct {
 		Name string `path:"name" maxLength:"30" example:"world"`
-	}) (*GreetingOutput, error) {
-		time.Sleep(2 * time.Second)
-		resp := &GreetingOutput{}
-		resp.Body.Message = fmt.Sprintf("no Hello, %s!", input.Name)
-		//resp.Body.Time = time.Now().Format("15:04:05") // чтобы видеть, кешируется ли
-		return resp, nil
+	}) (*entity.FlagResponse, error) {
+		flagName := input.Name
+		flag, err := serviceFlag.GetFlagByName(ctx, flagName)
+		if err != nil {
+			return nil, huma.Error404NotFound(
+				fmt.Sprintf("flag by name {%s} - not found", flagName),
+				err,
+			)
+		}
+		return flag, nil
 	})
 
-	// Start the server
+	huma.Register(api, huma.Operation{
+		OperationID: "get-flag-by-name",
+		Method:      "PUT",
+		Path:        "/flag/{name}",
+		Summary:     "get flag name from param and return flag",
+	}, func(ctx context.Context, input *struct {
+		Name string      `path:"name"`
+		Body models.Flag `json:"body"`
+	}) (*entity.MessageResponse, error) {
+		flagName := input.Name
+		flagDecode := input.Body
+		if strings.TrimSpace(flagName) != strings.TrimSpace(flagDecode.FlagName) {
+			return nil, huma.Error400BadRequest("flag name is invalid", ErrMainFlagNamesNotEqual)
+		}
+		flagName = flagDecode.FlagName
+		msg, err := serviceFlag.UpdateFlag(ctx, flagDecode)
+		if err != nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("flag by name {%s} - not found", flagName), err)
+		}
+		return msg, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-flag-by-name",
+		Method:      "DELETE",
+		Path:        "/flag/{name}",
+		Summary:     "get flag name from param and return flag",
+	}, func(ctx context.Context, input *struct {
+		Name string `path:"name"`
+	}) (*entity.MessageResponse, error) {
+		flagName := input.Name
+		msg, err := serviceFlag.DeleteFlag(ctx, flagName)
+		if err != nil {
+			return nil, huma.Error404NotFound(fmt.Sprintf("flag by name {%s} - not found", flagName), err)
+		}
+		return msg, nil
+	})
+
 	app.Listen(":8000")
 }

@@ -42,7 +42,7 @@ func (r *RepoFlagDB) DeleteFlag(ctx context.Context, flagName string) error {
 }
 
 // ListOfAllFkags возвращает список всех флагов
-func (r *RepoFlagDB) ListOfAllFkags(ctx context.Context) ([]models.Flag, error) {
+func (r *RepoFlagDB) ListOfAllFlags(ctx context.Context) ([]models.Flag, error) {
 	flags, err := r.db.WithContext(ctx).SelectAllFrom(models.FlagTable, "")
 	if err != nil {
 		return nil, err
@@ -51,7 +51,7 @@ func (r *RepoFlagDB) ListOfAllFkags(ctx context.Context) ([]models.Flag, error) 
 	return listOfFlags, nil
 }
 
-func (r *RepoFlagDB) ListOfFkagByNames(
+func (r *RepoFlagDB) ListOfFlagByNames(
 	ctx context.Context,
 	flagNames []string,
 ) ([]models.Flag, error) {
