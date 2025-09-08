@@ -92,13 +92,13 @@ func main() {
 		Summary:       "create a new flag",
 	}, func(ctx context.Context, input *struct {
 		Body models.Flag `json:"body"`
-	}) (*entity.MessageResponse, error) {
+	}) (*entity.FlagResponse, error) {
 		flag := input.Body
-		msg, err := serviceFlag.CreateNewFlag(ctx, flag)
+		respFlag, err := serviceFlag.CreateNewFlag(ctx, flag)
 		if err != nil {
 			return nil, huma.NewError(http.StatusConflict, "flag was not created", err)
 		}
-		return msg, nil
+		return respFlag, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -110,14 +110,14 @@ func main() {
 		Name string `path:"name" maxLength:"30" example:"world"`
 	}) (*entity.FlagResponse, error) {
 		flagName := input.Name
-		flag, err := serviceFlag.GetFlagByName(ctx, flagName)
+		respFlag, err := serviceFlag.GetFlagByName(ctx, flagName)
 		if err != nil {
 			return nil, huma.Error404NotFound(
 				fmt.Sprintf("flag by name {%s} - not found", flagName),
 				err,
 			)
 		}
-		return flag, nil
+		return respFlag, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -128,18 +128,18 @@ func main() {
 	}, func(ctx context.Context, input *struct {
 		Name string      `path:"name"`
 		Body models.Flag `json:"body"`
-	}) (*entity.MessageResponse, error) {
+	}) (*entity.FlagResponse, error) {
 		flagName := input.Name
 		flagDecode := input.Body
 		if strings.TrimSpace(flagName) != strings.TrimSpace(flagDecode.FlagName) {
 			return nil, huma.Error400BadRequest("flag name is invalid", ErrMainFlagNamesNotEqual)
 		}
 		flagName = flagDecode.FlagName
-		msg, err := serviceFlag.UpdateFlag(ctx, flagDecode)
+		respFlag, err := serviceFlag.UpdateFlag(ctx, flagDecode)
 		if err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("flag by name {%s} - not found", flagName), err)
 		}
-		return msg, nil
+		return respFlag, nil
 	})
 
 	huma.Register(api, huma.Operation{
@@ -149,13 +149,12 @@ func main() {
 		Summary:     "get flag name from param and return flag",
 	}, func(ctx context.Context, input *struct {
 		Name string `path:"name"`
-	}) (*entity.MessageResponse, error) {
+	}) (*struct{}, error) {
 		flagName := input.Name
-		msg, err := serviceFlag.DeleteFlag(ctx, flagName)
-		if err != nil {
+		if err := serviceFlag.DeleteFlag(ctx, flagName); err != nil {
 			return nil, huma.Error404NotFound(fmt.Sprintf("flag by name {%s} - not found", flagName), err)
 		}
-		return msg, nil
+		return nil, nil
 	})
 
 	app.Listen(":8000")

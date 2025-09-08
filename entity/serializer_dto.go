@@ -25,15 +25,3 @@ func NewListOfFlagResponse(flags []models.Flag) *ListOfFlagResponse {
 	responseListOfFlag.Body.Flags = flags
 	return responseListOfFlag
 }
-
-type MessageResponse struct {
-	Body struct {
-		Message string `json:"message"`
-	}
-}
-
-func NewMessageResponse(message string) *MessageResponse {
-	responseMessage := &MessageResponse{}
-	responseMessage.Body.Message = message
-	return responseMessage
-}

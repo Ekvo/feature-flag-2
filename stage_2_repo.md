@@ -13,14 +13,14 @@
 ```go
 //reform:public.flags
 type Flag struct {
-	FlagName    string          `reform:"flag_name,pk"`
-	IsEnable    bool            `reform:"is_enable"`
-	ActiveFrom  time.Time       `reform:"active_from"`
-	Data        json.RawMessage `reform:"data"`
-	DefaultData json.RawMessage `reform:"default_data"`
-	CreatedUser uuid.UUID       `reform:"created_user"`
-	CreatedAt   time.Time       `reform:"created_at"`
-	UpdatedAt   time.Time       `reform:"updated_at"`
+    FlagName    string          `json:"flag_name" reform:"flag_name,pk"`
+    IsEnable    bool            `json:"is_enable" reform:"is_enable"`
+    ActiveFrom  time.Time       `json:"active_from" reform:"active_from"`
+    Data        json.RawMessage `json:"data" reform:"data"`
+    DefaultData json.RawMessage `json:"default_data" reform:"default_data"`
+    CreatedUser uuid.UUID       `json:"created_user" reform:"created_user"`
+    CreatedAt   time.Time       `json:"created_at" reform:"created_at"`
+    UpdatedAt   time.Time       `json:"updated_at" reform:"updated_at"`
 }
 ```
 
@@ -72,6 +72,8 @@ type RepoCacheFlag struct {
 }
 
 // NewRepoCacheFlag конструктор
+// можно будуте создавть с заполеным кешом
+// так у нас будет возможность получить кол-во данных из БД, и задать размер *expirable.LRU[string, models.Flag]
 func NewRepoCacheFlag(cache *expirable.LRU[string, models.Flag]) *RepoCacheFlag
 
 // AddFlag добавить флаг в кеш
@@ -87,7 +89,7 @@ func (rc *RepoCacheFlag) RemoveFlag(flagName string)
 func (rc *RepoCacheFlag) GetFlagByName(flagName string) (models.Flag, bool)
 ```
 
-**fiber + fiber/middleware/cache** - откаpался от репозитория
+**fiber + fiber/middleware/cache** - отказался от репозитория
 ```go
 // выбрал так как он прост и понятен,
 // пришел к этому во время создания репозитория(получилась - ехидна) 7 строчек превратились в пакет, это тратило бы время других людей, чтобы разобраться
@@ -100,9 +102,116 @@ middlewareCache := cache.New(cache.Config{
     CacheControl: true,
     Methods:      []string{"GET"},// кешировать весь список флагов  
 })
+// кешируем в middlewareCache только по пути /flags
 app.Group("/flags").Use(middlewareCache)
 ```
 
+**Сущности для Request & Response**
+```go
+// FlagResponse - формат для ответа флага
+type FlagResponse struct {
+	Body struct {
+		Flag models.Flag `json:"flag"`
+	}
+}
+// NewFlagResponse - конструктор
+func NewFlagResponse(flag models.Flag) *FlagResponse
+
+// ListOfFlagResponse - формат для ответа списка флагов
+type ListOfFlagResponse struct {
+	Body struct {
+		Flags []models.Flag `json:"flag"`
+	}
+}
+
+// NewListOfFlagResponse - конструктор
+func NewListOfFlagResponse(flags []models.Flag) *ListOfFlagResponse
+
+// FlagNamesDecode для получения списков флагов по именам
+type FlagNamesDecode struct {
+    FlagNames []string `json:"flag_names"`
+}
+```
+
+**Service ServiceFlag** - сервисный слой для вызова в маршрутизаторах
+```go
+// бизне логика - обработки флага
+// основная в начале ищем в кеш, потом идем в базу
+// при запросах на получение models.Flag пишем в кеш
+type ServiceFlag struct {
+	repoDB    *db.RepoFlagDB
+	repoCache *cache.RepoCacheFlag
+}
+
+// NewServiceFlag - конструктор
+func NewServiceFlag(db *db.RepoFlagDB, cache *cache.RepoCacheFlag) *ServiceFlag
+
+
+// CreateNewFlag - создания флага
+// идем в кеш, если есть возвращаем ошибку (Already Exists)
+// если нет -> идем в БД  -> если ошибка делаем (Already Exists) - (можно потом писать в логи сами ошибки)
+// если все ok -> делаем и возвращаем ответ с данными созданного флага
+func (sf *ServiceFlag) CreateNewFlag(
+    ctx context.Context,
+    flag models.Flag,
+) (*entity.FlagResponse, error)
+
+// GetFlagByName - получение флага
+// идем в кеш, если есть делаем и возвращаем ответ
+// если нет -> идем в БД  -> если ошибка делаем (Not found)
+// если все ok -> пишем флаг в кеш
+// делаем и возвращаем ответ с данными флага из БД 
+func (sf *ServiceFlag) GetFlagByName(
+    ctx context.Context,
+    flagName string,
+) (*entity.FlagResponse, error)
+
+// UpdateFlag - обвноление флага
+// идем в кеш, если есть, берем старый флаг
+// если нет -> идем в БД  -> если ошибка делаем (Not found)
+// сравниваем время создания и создателя флага в новых и старых данных
+// если все ok -> пишем флаг в БД -> если ошибка делаем (Internal)
+// удаляем флаг из кеш
+// делаем и возвращаем ответ с данными новго флага 
+func (sf *ServiceFlag) UpdateFlag(
+    ctx context.Context,
+    newFlag models.Flag,
+) (*entity.FlagResponse, error)
+
+// DeleteFlag - удаление флага
+// идем в БД  -> если ошибка делаем (Not found)
+// удаляем флаг из кеш 
+func (sf *ServiceFlag) DeleteFlag(
+    ctx context.Context,
+    flagName string,
+) (error)
+
+// RetrieveListOfAllFlags - получение всех флагов
+// идем в БД  -> если ошибка делаем (Internal)
+// длина полученого списка == 0, делаем ошибку (Mot found)
+// пишем флаги в кеш
+// делаем и возвращаем ответ с данными флагов
+func (sf *ServiceFlag) RetrieveListOfAllFlags(ctx context.Context) (*entity.ListOfFlagResponse, error)
+
+// RetrieveListOfAllFlags - получение флагов по списку имен
+// создаем uniqFlagsNames := make(map[string]struct{}) - отсикае дубликаты
+// делаем массивы для ответа(listOfFlags), и массив с именами для запроса в БД(findFlagsByNamesFromDB)
+// идем в кеш и в цикле по имена флагов -> если есть пишем listOfFlags, если нет пишем имя флага в findFlagsByNamesFromDB
+
+// длина findFlagsByNamesFromDB > 0 -> идем в БД  -> если ошибка делаем (Internal)
+// длина полученого списка == 0, делаем ошибку (Mot found)
+
+// len(listOfFlags) != len(uniqFlagsNames)  -> есть unknown флаги
+// делаем список имен неизвестных флагов -> делаем ошибку со списком unknown флагов
+
+// все хорошо -> пишем флаги в кеш
+// делаем и возвращаем ответ с данными флагов
+func (sf *ServiceFlag) RetrieveListOfFlagsByNames(
+    ctx context.Context,
+    flagNames []string,
+) (*entity.ListOfFlagResponse, error)
+
+```
 
 
 

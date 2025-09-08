@@ -19,6 +19,8 @@ var (
 	ErrServiceNotFound = errors.New("not found")
 
 	ErrServiceUnknownFlag = errors.New("unknown flag")
+
+	ErrServiceUpdateFlagDataCreatedNotEqual = errors.New("update data flag created-at or created_user not equal")
 )
 
 type ServiceFlag struct {
@@ -33,7 +35,7 @@ func NewServiceFlag(db *db.RepoFlagDB, cache *cache.RepoCacheFlag) *ServiceFlag 
 func (sf *ServiceFlag) CreateNewFlag(
 	ctx context.Context,
 	flag models.Flag,
-) (*entity.MessageResponse, error) {
+) (*entity.FlagResponse, error) {
 	if _, ok := sf.repoCache.GetFlagByName(flag.FlagName); ok {
 		return nil, ErrServiceAlreadyExists
 	}
@@ -42,7 +44,7 @@ func (sf *ServiceFlag) CreateNewFlag(
 		return nil, ErrServiceAlreadyExists
 	}
 
-	return entity.NewMessageResponse("flag created"), nil
+	return entity.NewFlagResponse(flag), nil
 }
 
 func (sf *ServiceFlag) GetFlagByName(
@@ -58,13 +60,15 @@ func (sf *ServiceFlag) GetFlagByName(
 		return nil, ErrServiceNotFound
 	}
 
+	sf.repoCache.AddFlag(flag)
+
 	return entity.NewFlagResponse(flag), nil
 }
 
 func (sf *ServiceFlag) UpdateFlag(
 	ctx context.Context,
 	newFlag models.Flag,
-) (*entity.MessageResponse, error) {
+) (*entity.FlagResponse, error) {
 	var oldFlag models.Flag
 	var err error
 	var ok bool
@@ -76,8 +80,10 @@ func (sf *ServiceFlag) UpdateFlag(
 		}
 	}
 
-	newFlag.CreatedAt = oldFlag.CreatedAt
-	newFlag.CreatedUser = oldFlag.CreatedUser
+	if newFlag.UpdatedAt.UTC() != oldFlag.UpdatedAt.UTC() ||
+		newFlag.CreatedUser != oldFlag.CreatedUser {
+		return nil, ErrServiceUpdateFlagDataCreatedNotEqual
+	}
 
 	if err := sf.repoDB.UpdateFlag(ctx, newFlag); err != nil {
 		return nil, ErrServiceInternalError
@@ -85,26 +91,34 @@ func (sf *ServiceFlag) UpdateFlag(
 
 	sf.repoCache.RemoveFlag(newFlag.FlagName)
 
-	return entity.NewMessageResponse("flag updated"), nil
+	return entity.NewFlagResponse(newFlag), nil
 }
 
 func (sf *ServiceFlag) DeleteFlag(
 	ctx context.Context,
 	flagName string,
-) (*entity.MessageResponse, error) {
+) error {
 	if err := sf.repoDB.DeleteFlag(ctx, flagName); err != nil {
-		return nil, ErrServiceNotFound
+		return ErrServiceNotFound
 	}
 
 	sf.repoCache.RemoveFlag(flagName)
 
-	return entity.NewMessageResponse("flag deleted"), nil
+	return nil
 }
 
 func (sf *ServiceFlag) RetrieveListOfAllFlags(ctx context.Context) (*entity.ListOfFlagResponse, error) {
 	listOfFlags, err := sf.repoDB.ListOfAllFlags(ctx)
 	if err != nil {
 		return nil, ErrServiceInternalError
+	}
+
+	if len(listOfFlags) == 0 {
+		return nil, ErrServiceNotFound
+	}
+
+	for _, flag := range listOfFlags {
+		sf.repoCache.AddFlag(flag)
 	}
 
 	return entity.NewListOfFlagResponse(listOfFlags), nil
