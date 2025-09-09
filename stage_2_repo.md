@@ -1,6 +1,110 @@
 # Проектирование сервиса Feature Flags
 
-## Этап разработки репозиториев, маршрутизатора, адаптера humafiber для fiber/v3.
+## Этап разработки репозиториев, маршрутизатора, адаптера humafiber для fiber/v3, config, migrations.
+
+### Config
+* Задача - разработать config для Feature Flags API 
+
+* caarlos0/env/v11
+* joho/godotenv
+
+```go
+// ./config/config.go
+
+type Config struct {
+	DB         DataBaseConfig  `envPrefix:"DB_"`
+	Cache      CacheConfig     `envPrefix:"CACHE_"`
+	Migrations MigrationConfig `envPrefix:"MIGRATION_"`
+	Server     ServerConfig    `envPrefix:"SRV_"`
+}
+
+// NewConfig конструктор
+// вызывает метод config.parse
+func NewConfig(pathToEnv string) (*Config, error)
+
+// parse парсит данные из переменных ENV
+// вызываем godotenv.Load(pathToEnv) - задаем переменные окружения
+// получаем данные из ENV в cfg -> env.Parse, если ошибка -> return err
+// вызываем (cfgDB *DataBaseConfig) url()
+func (cfg *Config) parse(pathToEnv string) error
+
+type DataBaseConfig struct {
+    Host     string `env:"HOST"`
+    Port     uint16 `env:"PORT"`
+    User     string `env:"USER"`
+    Password string `env:"PASSWORD"`
+    Name     string `env:"NAME"`
+    SSLMode  string `env:"SSLMODE"`
+    
+    URL string `env:"-"`
+}
+
+// url делает DNS для БД
+func (cfgDB *DataBaseConfig) url() string
+
+type CacheConfig struct {
+    TTLMiddlewareFiber time.Duration `env:"TTL_MIDDLEWARE_FIBER"`
+    TTLLRU             time.Duration `env:"TTL_LRU"`
+    SizeLRU            int           `env:"SIZE_LRU"`
+}
+
+type MigrationConfig struct {
+    PathToMigrations string `env:"PATH"`
+    Action           string `env:"ACTION"`
+    Version          int64  `env:"VERSION"`
+}
+
+type ServerConfig struct {
+    Port     string        `env:"PORT"`
+    Host     string        `env:"HOST"`
+    ShutDown time.Duration `env:"SHUTDOWN"`
+}
+
+// ./.env
+
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_USER=ekvo
+DB_PASSWORD=qwert12345
+DB_NAME=ekvodb
+DB_SSLMODE=disable
+
+CACHE_TTL_TTL_MIDDLEWARE_FIBER=5m
+CACHE_TTL_LRU=5m
+CACHE_SIZE_LRU=1000
+
+MIGRATION_PATH=migrations
+MIGRATION_ACTION=down
+MIGRATION_VERSION=0
+
+SRV_PORT=8000
+SRV_HOST=127.0.0.1
+SRV_SHUTDOWN=10s
+```
+
+### Migrations
+* Задача - разработать SQL миграции, используя данные из config
+
+* pressly/goose/v3
+
+```go
+// ./migrations/<numeric>_file.go
+func init() {
+	goose.AddMigrationContext(Up, Down)
+}
+
+func Up(ctx context.Context, tx *sql.Tx) error
+
+func Down(ctx context.Context, tx *sql.Tx) error 
+
+
+// ./main.go
+
+// doMigrations выполняет миграции
+// проверяем если cfg.Version < 0 && (action == "up-to" || action == "down-to") -> error
+// через switch action { делаем миграции -> если action = up-to or down-to добавляем версию }
+func doMigrations(ctx context.Context, cfg *config.MigrationConfig, db *sql.DB) error
+```
 
 ### SQL БД работаем через ORM c cache
 * Задача - хранение данных флагов
@@ -64,7 +168,7 @@ func ConvertReformStructToModel[T Models](dataFromDB []reform.Struct) ([]T,error
 // ErrorWithUnknownModelNames - дженерик
 // создаем массив для неизвестных имен
 // for uniqModelNames { for listOfModels { пишем в массив имена uniqModelNames } }
-// делаем fmt.Errorf("error - {%v}, flagNames - {%s}") - в шаблон добавляем: костомную ошибку с описанием и строку "alien1, alien2"
+// делаем fmt.Errorf("error - {%v}, flagNames - {%s}") - в шаблон добавляем: кастомную ошибку с описанием и строку "alien1, alien2"
 func ErrorWithUnknownModelNames[T models](
     uniqModelNames []string,
     listOfModels []T,
@@ -167,7 +271,7 @@ func (rb *RepoFlag) DeleteFlag(ctx context.Context, flagName string) error
 // return массив флагов
 func (rb *RepoFlag) ListOfAllFlags(ctx context.Context) ([]models.Flag, error)
 
-// ListOfFkagByNames возвращает список флагов по списку имен
+// ListOfFlagByNames возвращает список флагов по списку имен
 // делаем массивы для ответа(listOfFlags), и массив с именами для запроса в БД(findFlagsByNamesFromDB)
 // идем в кеш и в цикле по имена флагов -> если есть пишем в listOfFlags, если нет пишем имя флага в findFlagsByNamesFromDB
 // длина findFlagsByNamesFromDB > 0 -> идем в БД  -> если ошибка return err
@@ -181,7 +285,7 @@ func (rb *RepoFlag) ListOfAllFlags(ctx context.Context) ([]models.Flag, error)
 // if len(listOfFlags) != len(flagNames), т.е. у нас есть unknown flags -> делаем ошибку в 'errorWithUnknownFlags'
 // все ok -> пишем флаги в кеш
 // return массив флагов
-func (rb *RepoFlag) ListOfFkagByNames(ctx context.Context, flagNames []string) ([]models.Flag, error)
+func (rb *RepoFlag) ListOfFlagByNames(ctx context.Context, flagNames []string) ([]models.Flag, error)
 ```
 
 ### fiber, middleware/cache
@@ -664,9 +768,7 @@ func NewWithGroup(r *fiber.App, g fiber.Router, config huma.Config) huma.API {
 }
 ```
 
-Следующай этап разработки:   
-**включает**: миграции, .env, создание config. 
-
+Следующай этап разработки:
 
 
 

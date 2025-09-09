@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"errors"
 	"feature-flag-2/adapter/humafiberv3"
+	"feature-flag-2/config"
 	"feature-flag-2/entity"
 	_ "feature-flag-2/migrations"
 	"feature-flag-2/models"
 	mydb "feature-flag-2/repository/db"
 	"feature-flag-2/service"
-	"flag"
 	"fmt"
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/gofiber/fiber/v3"
@@ -21,23 +21,26 @@ import (
 	"gopkg.in/reform.v1"
 	"gopkg.in/reform.v1/dialects/postgresql"
 	"log"
+	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
-	"time"
+	"syscall"
 )
 
-// Флаги командной строки
 var (
-	action  = flag.String("action", "up", "Действие: up, down, up-to, down-to, status")
-	version = flag.Int64("version", 0, "Версия миграции (для up-to, down-to)")
+	ErrMainFlagNamesNotEqual        = errors.New("flag name from param not equal falg name from body")
+	ErrMainInvalidActionOfMigration = errors.New("invalid action of migration")
 )
-
-var ErrMainFlagNamesNotEqual = errors.New("flag name from param not equal falg name from body")
 
 func main() {
-	ctx := context.Background()
-	dsn := "postgres://ekvo:qwert12345@localhost/ekvodb?sslmode=disable"
-	db, err := sql.Open("pgx", dsn)
+	cfg, err := config.NewConfig(`./.env`)
+	if err != nil {
+		log.Fatal("Failed config", err)
+	}
+	//dsn := "postgres://ekvo:qwert12345@localhost/ekvodb?sslmode=disable"
+	db, err := sql.Open("pgx", cfg.DB.URL)
 	if err != nil {
 		log.Fatal("Failed to connect to database: ", err)
 	}
@@ -47,41 +50,13 @@ func main() {
 		return
 	}
 
-	flag.Parse()
-	// Логируем выбранный action
-	log.Printf("▶️  Выбрано действие: %s", *action)
+	ctx := context.Background()
 
-	switch *action {
-	case "up":
-		if err := goose.UpContext(ctx, db, "migrations"); err != nil {
-			log.Printf("main: goose.Up err - {%v}", err)
-			return
-		}
-	case "down":
-		if err := goose.DownContext(ctx, db, "migrations"); err != nil {
-			log.Printf("main: goose.Down err - {%v}", err)
-			return
-		}
-	case "up-to":
-		if *version == 0 {
-			log.Printf("main: goose.UpTo err - {%v}", err)
-			return
-		}
-		if err := goose.UpToContext(ctx, db, "migrations", *version); err != nil {
-			log.Printf("main: goose.UpTo err - {%v}", err)
-			return
-		}
-	case "down-to":
-		if *version == 0 {
-			log.Printf("main: goose.DownTo err - {%v}", err)
-			return
-		}
-		if err := goose.DownToContext(ctx, db, "migrations", *version); err != nil {
-			log.Printf("main: goose.DownTo err - {%v}", err)
-			return
-		}
+	if err := doMigrations(ctx, &cfg.Migrations, db); err != nil {
+		log.Printf("main: doMigrations error - {%v}", err)
+		return
 	}
-	lru := expirable.NewLRU[string, models.Flag](1000, nil, 5*time.Minute)
+	lru := expirable.NewLRU[string, models.Flag](cfg.Cache.SizeLRU, nil, cfg.Cache.TTLLRU)
 	reformDB := reform.NewDB(db, postgresql.Dialect, reform.NewPrintfLogger(log.Printf))
 	repoDB := mydb.NewRepoFlagDB(reformDB, lru)
 	serviceFlag := service.NewServiceFlag(repoDB)
@@ -89,7 +64,7 @@ func main() {
 	// Create a new Fiber app
 	app := fiber.New()
 	fcache := cache.New(cache.Config{
-		Expiration:   5 * time.Minute,
+		Expiration:   cfg.Cache.TTLMiddlewareFiber,
 		CacheControl: true,
 		Methods:      []string{"GET"},
 	})
@@ -198,5 +173,64 @@ func main() {
 		return nil, nil
 	})
 
-	app.Listen(":8000")
+	go func() {
+		addr := net.JoinHostPort(cfg.Server.Host, cfg.Server.Port)
+		if err := app.Listen(addr); !errors.Is(err, http.ErrServerClosed) {
+			db.Close()
+			log.Fatalf("failed to listen: %v", err)
+		}
+	}()
+
+	chStop := make(chan os.Signal, 3)
+	signal.Notify(chStop,
+		os.Interrupt,
+		syscall.SIGTERM,
+		syscall.SIGINT,
+	)
+
+	<-chStop
+
+	log.Println("Получен сигнал завершения, останавливаем сервер...")
+
+	ctx, cancel := context.WithTimeout(ctx, cfg.Server.ShutDown)
+	defer cancel()
+
+	if err := app.ShutdownWithContext(ctx); err != nil {
+		log.Printf("main: app.Shutdown error - {%v}", err)
+		return
+	}
+
+	log.Println("Сервер остановлен корректно.")
+}
+
+func doMigrations(ctx context.Context, cfg *config.MigrationConfig, db *sql.DB) error {
+	action := cfg.Action
+	dirOfMigrations := cfg.PathToMigrations
+	version := cfg.Version
+
+	if version == 0 && (action == "up-to" || action == "down-to") {
+		return ErrMainInvalidActionOfMigration
+	}
+
+	switch action {
+	case "up":
+		if err := goose.UpContext(ctx, db, dirOfMigrations); err != nil {
+			return err
+		}
+	case "down":
+		if err := goose.DownContext(ctx, db, dirOfMigrations); err != nil {
+			return err
+		}
+	case "up-to":
+		if err := goose.UpToContext(ctx, db, dirOfMigrations, version); err != nil {
+			return err
+		}
+	case "down-to":
+		if err := goose.DownToContext(ctx, db, dirOfMigrations, version); err != nil {
+			return err
+		}
+	default:
+		return ErrMainInvalidActionOfMigration
+	}
+	return nil
 }
