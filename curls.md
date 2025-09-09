@@ -11,6 +11,18 @@ curl -X POST   http://localhost:8000/flag   -H 'Content-Type: application/json' 
 "updated_at": "2025-04-01T10:00:00Z"
 }'
 
+curl -X POST   http://localhost:8000/flag   -H 'Content-Type: application/json'   -d '{
+"flag_name": "feature_new_ui",
+"is_deleted": false,
+"is_enabled": true,
+"active_from": "2025-04-05T00:00:00Z",
+"data": {"color": "blue", "size": "large"},
+"default_data": {"color": "gray", "size": "medium"},
+"created_by": "123e4567-e89b-12d3-a456-426614174000",
+"created_at": "2025-04-01T10:00:00Z",
+"updated_at": "2025-04-01T10:00:00Z"
+}'
+
 curl -X PUT  http://localhost:8000/flag/feature_new_ui   -H 'Content-Type: application/json'   -d '{
 "flag_name": "feature_new_ui",
 "is_enable": false,

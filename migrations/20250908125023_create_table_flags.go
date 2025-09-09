@@ -12,15 +12,16 @@ func init() {
 
 func Up(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS public.flags (
-     flag_name      TEXT                        NOT NULL,
-     is_enable      BOOLEAN                     NOT NULL,
-     active_from    TIMESTAMP WITH TIME ZONE    NOT NULL,
-     data           JSONB                       NOT NULL,
-     default_data   JSONB                       NOT NULL,
-     created_user   UUID                        NOT NULL,
-     created_at     TIMESTAMP WITH TIME ZONE    NOT NULL,
-     updated_at     TIMESTAMP WITH TIME ZONE    NOT NULL,                                             
-     CONSTRAINT pk_flags PRIMARY KEY (flag_name)
+	flag_name      TEXT                        NOT NULL,
+	is_deleted     BOOLEAN                     NOT NULL,
+	is_enabled     BOOLEAN                     NOT NULL,
+	active_from    TIMESTAMP WITH TIME ZONE    NOT NULL,
+	data           JSONB                       NOT NULL,
+	default_data   JSONB                       NOT NULL,
+	created_by     UUID                        NOT NULL,
+	created_at     TIMESTAMP WITH TIME ZONE    NOT NULL,
+	updated_at     TIMESTAMP WITH TIME ZONE    NOT NULL,	    
+	CONSTRAINT pk_flags PRIMARY KEY (flag_name)
 );`)
 	if err != nil {
 		return err
@@ -29,7 +30,7 @@ func Up(ctx context.Context, tx *sql.Tx) error {
 }
 
 func Down(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, "UPDATE flags SET flag_name='2feature_new_ui' WHERE flag_name='feature_new_ui2';")
+	_, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS public.flags;")
 	if err != nil {
 		return err
 	}

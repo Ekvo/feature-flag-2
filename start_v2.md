@@ -43,13 +43,14 @@ _репозиторий_ (*expirable.LRU[string, Falg]):
 -- Создаём таблицу flags с поддержкой временных зон
 CREATE TABLE IF NOT EXISTS public.flags (
      flag_name      TEXT                        NOT NULL,
-     is_enable      BOOLEAN                     NOT NULL,
+     is_enabled     BOOLEAN                     NOT NULL,
      active_from    TIMESTAMP WITH TIME ZONE    NOT NULL,
      data           JSONB                       NOT NULL,
      default_data   JSONB                       NOT NULL,
-     created_user   UUID                        NOT NULL,   -- Изменено: TEXT → UUID
+     created_by     UUID                        NOT NULL,
      created_at     TIMESTAMP WITH TIME ZONE    NOT NULL,
-     updated_at     TIMESTAMP WITH TIME ZONE    NOT NULL                                             
+     updated_at     TIMESTAMP WITH TIME ZONE    NOT NULL,
+     is_deleted     BOOLEAN                     NOT NULL,    
      CONSTRAINT pk_flags PRIMARY KEY (flag_name)
 );
 ```

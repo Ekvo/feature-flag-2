@@ -29,11 +29,12 @@ func (v *flagTableType) Name() string {
 func (v *flagTableType) Columns() []string {
 	return []string{
 		"flag_name",
-		"is_enable",
+		"is_deleted",
+		"is_enabled",
 		"active_from",
 		"data",
 		"default_data",
-		"created_user",
+		"created_by",
 		"created_at",
 		"updated_at",
 	}
@@ -62,11 +63,12 @@ var FlagTable = &flagTableType{
 		SQLName:   "flags",
 		Fields: []parse.FieldInfo{
 			{Name: "FlagName", Type: "string", Column: "flag_name"},
-			{Name: "IsEnable", Type: "bool", Column: "is_enable"},
+			{Name: "IsDeleted", Type: "bool", Column: "is_deleted"},
+			{Name: "IsEnabled", Type: "bool", Column: "is_enabled"},
 			{Name: "ActiveFrom", Type: "time.Time", Column: "active_from"},
-			{Name: "Data", Type: "json.RawMessage", Column: "data"},
-			{Name: "DefaultData", Type: "json.RawMessage", Column: "default_data"},
-			{Name: "CreatedUser", Type: "uuid.UUID", Column: "created_user"},
+			{Name: "Data", Type: "JSONmap", Column: "data"},
+			{Name: "DefaultData", Type: "JSONmap", Column: "default_data"},
+			{Name: "CreatedBy", Type: "uuid.UUID", Column: "created_by"},
 			{Name: "CreatedAt", Type: "time.Time", Column: "created_at"},
 			{Name: "UpdatedAt", Type: "time.Time", Column: "updated_at"},
 		},
@@ -77,15 +79,16 @@ var FlagTable = &flagTableType{
 
 // String returns a string representation of this struct or record.
 func (s Flag) String() string {
-	res := make([]string, 8)
+	res := make([]string, 9)
 	res[0] = "FlagName: " + reform.Inspect(s.FlagName, true)
-	res[1] = "IsEnable: " + reform.Inspect(s.IsEnable, true)
-	res[2] = "ActiveFrom: " + reform.Inspect(s.ActiveFrom, true)
-	res[3] = "Data: " + reform.Inspect(s.Data, true)
-	res[4] = "DefaultData: " + reform.Inspect(s.DefaultData, true)
-	res[5] = "CreatedUser: " + reform.Inspect(s.CreatedUser, true)
-	res[6] = "CreatedAt: " + reform.Inspect(s.CreatedAt, true)
-	res[7] = "UpdatedAt: " + reform.Inspect(s.UpdatedAt, true)
+	res[1] = "IsDeleted: " + reform.Inspect(s.IsDeleted, true)
+	res[2] = "IsEnabled: " + reform.Inspect(s.IsEnabled, true)
+	res[3] = "ActiveFrom: " + reform.Inspect(s.ActiveFrom, true)
+	res[4] = "Data: " + reform.Inspect(s.Data, true)
+	res[5] = "DefaultData: " + reform.Inspect(s.DefaultData, true)
+	res[6] = "CreatedBy: " + reform.Inspect(s.CreatedBy, true)
+	res[7] = "CreatedAt: " + reform.Inspect(s.CreatedAt, true)
+	res[8] = "UpdatedAt: " + reform.Inspect(s.UpdatedAt, true)
 	return strings.Join(res, ", ")
 }
 
@@ -94,11 +97,12 @@ func (s Flag) String() string {
 func (s *Flag) Values() []interface{} {
 	return []interface{}{
 		s.FlagName,
-		s.IsEnable,
+		s.IsDeleted,
+		s.IsEnabled,
 		s.ActiveFrom,
 		s.Data,
 		s.DefaultData,
-		s.CreatedUser,
+		s.CreatedBy,
 		s.CreatedAt,
 		s.UpdatedAt,
 	}
@@ -109,11 +113,12 @@ func (s *Flag) Values() []interface{} {
 func (s *Flag) Pointers() []interface{} {
 	return []interface{}{
 		&s.FlagName,
-		&s.IsEnable,
+		&s.IsDeleted,
+		&s.IsEnabled,
 		&s.ActiveFrom,
 		&s.Data,
 		&s.DefaultData,
-		&s.CreatedUser,
+		&s.CreatedBy,
 		&s.CreatedAt,
 		&s.UpdatedAt,
 	}

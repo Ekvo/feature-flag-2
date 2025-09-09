@@ -29,7 +29,7 @@ import (
 
 // Флаги командной строки
 var (
-	action  = flag.String("action", "down", "Действие: up, down, up-to, down-to, status")
+	action  = flag.String("action", "up", "Действие: up, down, up-to, down-to, status")
 	version = flag.Int64("version", 0, "Версия миграции (для up-to, down-to)")
 )
 
@@ -139,7 +139,7 @@ func main() {
 		flagNames := input.Body
 		flagsByNames, err := serviceFlag.RetrieveListOfFlagsByNames(ctx, flagNames.FlagNames)
 		if err != nil {
-			return nil, huma.Error404NotFound("empty list of flags", err)
+			return nil, huma.Error404NotFound("empty list of flags1", err)
 		}
 		return flagsByNames, nil
 	})
@@ -153,8 +153,8 @@ func main() {
 	}, func(ctx context.Context, input *struct {
 		Body models.Flag `json:"body"`
 	}) (*entity.FlagResponse, error) {
-		flag := input.Body
-		respFlag, err := serviceFlag.CreateNewFlag(ctx, flag)
+		newFlag := input.Body
+		respFlag, err := serviceFlag.CreateNewFlag(ctx, newFlag)
 		if err != nil {
 			return nil, huma.NewError(http.StatusConflict, "flag was not created", err)
 		}

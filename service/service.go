@@ -69,21 +69,21 @@ func (sf *ServiceFlag) UpdateFlag(
 	ctx context.Context,
 	newFlag models.Flag,
 ) (*entity.FlagResponse, error) {
-	var oldFlag models.Flag
-	var err error
-	var ok bool
-	oldFlag, ok = sf.repoCache.GetFlagByName(newFlag.FlagName)
-	if !ok {
-		oldFlag, err = sf.repoDB.GetFlagByName(ctx, newFlag.FlagName)
-		if err != nil {
-			return nil, ErrServiceNotFound
-		}
-	}
+	//var oldFlag models.Flag
+	//var err error
+	//var ok bool
+	//oldFlag, ok = sf.repoCache.GetFlagByName(newFlag.FlagName)
+	//if !ok {
+	//	oldFlag, err = sf.repoDB.GetFlagByName(ctx, newFlag.FlagName)
+	//	if err != nil {
+	//		return nil, ErrServiceNotFound
+	//	}
+	//}
 
-	if newFlag.UpdatedAt.UTC() != oldFlag.UpdatedAt.UTC() ||
-		newFlag.CreatedUser != oldFlag.CreatedUser {
-		return nil, ErrServiceUpdateFlagDataCreatedNotEqual
-	}
+	//if newFlag.UpdatedAt.UTC() != oldFlag.UpdatedAt.UTC() ||
+	//	newFlag.CreatedUser != oldFlag.CreatedUser {
+	//	return nil, ErrServiceUpdateFlagDataCreatedNotEqual
+	//}
 
 	if err := sf.repoDB.UpdateFlag(ctx, newFlag); err != nil {
 		return nil, ErrServiceInternalError

@@ -3,14 +3,13 @@ package db
 import (
 	"context"
 	"feature-flag-2/models"
-	"github.com/hashicorp/golang-lru/v2/expirable"
-
 	"gopkg.in/reform.v1"
+	"log"
 )
 
 type RepoFlagDB struct {
-	db    *reform.DB
-	cache *expirable.LRU[string, models.Flag]
+	db *reform.DB
+	//cache *expirable.LRU[string, models.Flag]
 }
 
 func NewRepoFlagDB(db *reform.DB) *RepoFlagDB {
@@ -19,7 +18,10 @@ func NewRepoFlagDB(db *reform.DB) *RepoFlagDB {
 
 // Create создает новый флаг
 func (r *RepoFlagDB) CreateFlag(ctx context.Context, flag models.Flag) error {
-	return r.db.WithContext(ctx).Insert(&flag)
+	exec := func(t *reform.TX) error {
+		return t.WithContext(ctx).Insert(&flag)
+	}
+	return r.db.InTransactionContext(ctx, nil, exec)
 }
 
 // GetByFlagName возвращает флаг по имени
@@ -33,7 +35,20 @@ func (r *RepoFlagDB) GetFlagByName(ctx context.Context, flagName string) (models
 
 // Update обновляет флаг
 func (r *RepoFlagDB) UpdateFlag(ctx context.Context, flag models.Flag) error {
-	return r.db.WithContext(ctx).Update(&flag)
+	exec := func(tx *reform.TX) error {
+		var tmpFlag models.Flag
+		if err := tx.WithContext(ctx).SelectOneTo(
+			&tmpFlag,
+			`WHERE flag_name = $1 FOR UPDATE`,
+			flag.FlagName,
+		); err != nil {
+			return err
+		}
+		log.Printf("flag updated by flag name: %v", tmpFlag)
+
+		return tx.WithContext(ctx).Update(&flag)
+	}
+	return r.db.InTransactionContext(ctx, nil, exec)
 }
 
 // Delete удаляет флаг
