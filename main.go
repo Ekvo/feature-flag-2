@@ -82,10 +82,10 @@ func main() {
 			return
 		}
 	}
-
-	reformDB := reform.NewDB(db, postgresql.Dialect, reform.NewPrintfLogger(log.Printf))
-	repoDB := mydb.NewRepoFlagDB(reformDB)
 	lru := expirable.NewLRU[string, models.Flag](1000, nil, 5*time.Minute)
+	reformDB := reform.NewDB(db, postgresql.Dialect, reform.NewPrintfLogger(log.Printf))
+	repoDB := mydb.NewRepoFlagDB(reformDB, lru)
+
 	repoCache := mycache.NewRepoCacheFlag(lru)
 	serviceFlag := service.NewServiceFlag(repoDB, repoCache)
 

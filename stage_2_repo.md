@@ -14,32 +14,54 @@
 ```go
 //reform:public.flags
 type Flag struct {
-    FlagName    string          `json:"flag_name" reform:"flag_name,pk"`
-    IsEnable    bool            `json:"is_enable" reform:"is_enable"`
-    ActiveFrom  time.Time       `json:"active_from" reform:"active_from"`
-    Data        JSONmap `json:"data" reform:"data"`
-    DefaultData JSONmap `json:"default_data" reform:"default_data"`
-    CreatedUser uuid.UUID       `json:"created_user" reform:"created_user"`
-    CreatedAt   time.Time       `json:"created_at" reform:"created_at"`
-    UpdatedAt   time.Time       `json:"updated_at" reform:"updated_at"`
+    FlagName    string    `json:"flag_name" reform:"flag_name,pk"`
+    IsDeleted   bool      `json:"is_deleted" reform:"is_deleted"`
+    IsEnabled   bool      `json:"is_enabled" reform:"is_enabled"`
+    ActiveFrom  time.Time `json:"active_from" reform:"active_from"`
+    Data        JSONmap   `json:"data" reform:"data"`
+    DefaultData JSONmap   `json:"default_data" reform:"default_data"`
+    CreatedBy   uuid.UUID `json:"created_by" reform:"created_by"`
+    CreatedAt   time.Time `json:"created_at" reform:"created_at"`
+    UpdatedAt   time.Time `json:"updated_at" reform:"updated_at"`
 }
 ```
 
 **Репозитори БД и методы**
 ```go
-type RepoFlag struct {
-    db *reform.DB
+type RepoFlagDB struct {
+    db    *reform.DB
+    cache *expirable.LRU[string, models.Flag]
 }
 
 // NewRepoFlagDB - конструктор
-func NewRepoFlagDB(db *reform.DB) *RepoFlagDB
+func NewRepoFlagDB(
+    db *reform.DB,
+    cache *expirable.LRU[string, models.Flag],
+) *RepoFlagDB
 
-// CreateFlag создает новый флаг 
-// обертка для функции reform.Querier.Insert
+// CreateFlag создает новый флаг
+// подводные камни: мы должны создавть флаг даже если он сущесвует в базе -> со статусом (is_deleted = true)
+// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+/*
+exec := func(tx *reform.TX) error{
+    var oldFlag models.Flag
+    идем в базу tx.WithContext(ctx).SelectOneTo  с tail = WHERE flag_name = $1 FOR UPDATE
+    если ошибка -> возвращаем ошибку
+    или мы НАШЛИ флаг 
+    if !oldFlag.IsDeleted -> return Err Already Exists    
+    производим полное обновление флага -> tx.WithContext(ctx).Update(&newFlag)
+    удаляем из кеш (на всякий)
+    return nil  
+   }
+ */
+// вызываем InTransactionContext(ctx, nil, exec)
+// если ошибка -> if errors.Is(err, sql.ErrNoRows) -> делаем запись в базу WithContext(ctx).Insert(&newFlag)
+// все ok -> return nil
 func (rb *RepoFlag) CreateFlag(ctx context.Context, flag models.Flag) error
 
 // GetByFlagName возвращает флаг по имени
-// создаем &models.Flag и передаем вместе с flagName в функцию reform.Querier.FindByPrimaryKeyTo
+// идем в кеш, нашли -> return  флаг
+// сетаем имя флага в пустой флаг из кеша, идем reform.Querier.FindByPrimaryKeyTo
 func (rb *RepoFlag) GetFlagByName(ctx context.Context, flagName string) (models.Flag, error)
 
 // UpdateFlag обновляет флаг

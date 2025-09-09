@@ -14,8 +14,6 @@ import (
 var (
 	ErrServiceInternalError = errors.New("internal error")
 
-	ErrServiceAlreadyExists = errors.New("already exists")
-
 	ErrServiceNotFound = errors.New("not found")
 
 	ErrServiceUnknownFlag = errors.New("unknown flag")
@@ -36,12 +34,8 @@ func (sf *ServiceFlag) CreateNewFlag(
 	ctx context.Context,
 	flag models.Flag,
 ) (*entity.FlagResponse, error) {
-	if _, ok := sf.repoCache.GetFlagByName(flag.FlagName); ok {
-		return nil, ErrServiceAlreadyExists
-	}
-
 	if err := sf.repoDB.CreateFlag(ctx, flag); err != nil {
-		return nil, ErrServiceAlreadyExists
+		return nil, err
 	}
 
 	return entity.NewFlagResponse(flag), nil
