@@ -41,10 +41,11 @@ func (sf *ServiceFlag) UpdateFlag(
 	ctx context.Context,
 	newFlag models.Flag,
 ) (*entity.FlagResponse, error) {
-	if err := sf.repoDB.UpdateFlag(ctx, newFlag); err != nil {
+	flag, err := sf.repoDB.UpdateFlag(ctx, newFlag)
+	if err != nil {
 		return nil, err
 	}
-	return entity.NewFlagResponse(newFlag), nil
+	return entity.NewFlagResponse(flag), nil
 }
 
 func (sf *ServiceFlag) DeleteFlag(

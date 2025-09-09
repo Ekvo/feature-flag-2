@@ -19,6 +19,10 @@ type Flag struct {
 	UpdatedAt   time.Time `json:"updated_at" reform:"updated_at"`
 }
 
+func (f Flag) GetModelName() string {
+	return f.FlagName
+}
+
 // TableName возвращает имя таблицы
 func (f *Flag) TableName() string {
 	return "flags"

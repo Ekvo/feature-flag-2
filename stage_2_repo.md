@@ -29,17 +29,46 @@ type Flag struct {
 // JSONmap работа SQL с map 
 type JSONmap map[string]any
 
-// map в []byte для sql формат
+// map в []byte для sql
 func (jm JSONmap) Value() (driver.Value, error)
 
 // из sql данных []byte в map 
 func (jm *JSONmap) Scan(value any) error
 
 // Models сущности для дженериков, при приобразовании данных из БД в определнный тип
-type Models interface {
-    Flag
+// []reform.Struct -> models.models
+type models interface {
+    GetModelName() string
 }
 
+// ConvertReformStructToModel дженерик
+// перобразуем []reform.Struct в []models.Models(./models/models.go)
+// models.Models - может быть только объектом, не указателем! 
+// проверяем какой к нам пришел T если is_ptr -> return err 
+// получаем тип указателя(reflect.TypeOf((*T)(nil))) для проверки объекта из ответа БД
+// в цикле 
+/*
+   for _, f := range dataFromDB {
+       fVal := reflect.ValueOf(f)
+       if (Type of 'f' != expected ptr type ) {
+           return nil, err
+       }
+       flag := fVal.Elem().Interface().(T)
+       пишем флаг в массив
+   }
+*/
+// все ok -> пишем флаги в кеш
+// return массив флагов
+func ConvertReformStructToModel[T Models](dataFromDB []reform.Struct) ([]T,error)
+
+// ErrorWithUnknownModelNames - дженерик
+// создаем массив для неизвестных имен
+// for uniqModelNames { for listOfModels { пишем в массив имена uniqModelNames } }
+// делаем fmt.Errorf("error - {%v}, flagNames - {%s}") - в шаблон добавляем: костомную ошибку с описанием и строку "alien1, alien2"
+func ErrorWithUnknownModelNames[T models](
+    uniqModelNames []string,
+    listOfModels []T,
+) error
 ```
 
 **Репозитори БД и методы**
@@ -57,9 +86,9 @@ func NewRepoFlagDB(
 
 // CreateFlag создает новый флаг
 // подводные камни:
-// мы должны создавть флаг даже если он сущесвует в базе -> со статусом (is_deleted = true)
+// мы должны создавать флаг даже если он существует в базе -> со статусом (is_deleted = true)
 // если флаг есть, надо залочить строку (FOR UPDATE)
-// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+// создаем функцию exec для транзакции (reform.DB.InTransactionContext)
 /*
 exec := func(tx *reform.TX) error{
     var oldFlag models.Flag
@@ -87,14 +116,14 @@ func (rb *RepoFlag) GetFlagByName(ctx context.Context, flagName string) (models.
 // UpdateFlag обновляет флаг
 // подводные камни:
 // если флаг есть, надо залочить строку (FOR UPDATE)
-// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+// создаем функцию exec для транзакции (reform.DB.InTransactionContext)
 /*
    exec := func(tx *reform.TX) error{
        var oldFlag models.Flag
        идем в базу tx.WithContext(ctx).SelectOneTo  с tail = WHERE is_deleted = false AND flag_name = $1 FOR UPDATE
        если ошибка -> возвращаем ошибку
        или мы НАШЛИ флаг
-       Здесь в будушем нужно будет провалидировать даные (например: сравнить время создания, uuid createdBy)
+       Здесь в будуюшем нужно будет провалидировать данные (например: сравнить время создания, uuid createdBy)
        производим полное обновление флага ->
        return tx.WithContext(ctx).Update(&newFlag)
     }
@@ -102,14 +131,17 @@ func (rb *RepoFlag) GetFlagByName(ctx context.Context, flagName string) (models.
 // вызываем InTransactionContext(ctx, nil, exec)
 // если ошибка -> возвращаем ошибку
 // все ok -> удаляем флаг из кеш
-// return nil
-func (rb *RepoFlag) UpdateFlag(ctx context.Context, flag models.Flag) error
+// return flag, nil
+func (r *RepoFlagDB) UpdateFlag(
+    ctx context.Context,
+    newFlag models.Flag,
+) (models.Flag, error)
 
 // DeleteFlag обновляет флаг
 // подводные камни:
 // 1. мы должны поменять статус в таблице is_deleted на true, при условии что флаг есть и is_deleted = false
 // 2. если флаг есть, надо залочить строку (FOR UPDATE)
-// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+// создаем функцию exec для транзакции (reform.DB.InTransactionContext)
 /*
    exec := func(tx *reform.TX) error{
        var flagFromDB models.Flag
@@ -129,7 +161,7 @@ func (rb *RepoFlag) DeleteFlag(ctx context.Context, flagName string) error
 
 // ListOfAllFkags возвращает список всех флагов
 // вызываем reform.Querier.SelectAllFrom(models.FlagTable,"")
-// вызываем 'convertReformStructToFlag[model.Flag]'
+// вызываем 'models.convertReformStructToFlag[models.Flag]'
 // если ошибка -> возвращаем ошибку
 // все ok -> пишем флаги в кеш
 // return массив флагов
@@ -139,45 +171,17 @@ func (rb *RepoFlag) ListOfAllFlags(ctx context.Context) ([]models.Flag, error)
 // делаем массивы для ответа(listOfFlags), и массив с именами для запроса в БД(findFlagsByNamesFromDB)
 // идем в кеш и в цикле по имена флагов -> если есть пишем в listOfFlags, если нет пишем имя флага в findFlagsByNamesFromDB
 // длина findFlagsByNamesFromDB > 0 -> идем в БД  -> если ошибка return err
-// преобразовываем falgNames []string в []any 
+// преобразовываем flagNames []string в []any 
 // вызываем reform.Querier.Delete.FindAllFrom9(models.FlagTable, "flag_name", args...)
 // если ошибка return err
-// вызываем 'convertReformStructToFlag[T]'
+// вызываем 'models.ConvertReformStructToModels[models.Flag]'
 // если ошибка return err
-// объекдиняем данные из кеш и базы
-// длина полученого списка(listOfFlags) == 0, делаем ошибку (Not found)
+// объединяем данные из кеш и базы
+// длина полученного списка(listOfFlags) == 0, делаем ошибку (Not found)
 // if len(listOfFlags) != len(flagNames), т.е. у нас есть unknown flags -> делаем ошибку в 'errorWithUnknownFlags'
 // все ok -> пишем флаги в кеш
 // return массив флагов
 func (rb *RepoFlag) ListOfFkagByNames(ctx context.Context, flagNames []string) ([]models.Flag, error)
-
-// errorWithUnknownFlag длаем ошибку с именами флагов
-// for uniqFlagsNames { for listOfFlags { пишем в массив имена unknownFlags } }
-// делаем fmt.Errorf("error - {%v}, flagNames - {%s}") - в шаблон добаляем: костомную ошибку с описанием и строку "alien1, alien2"
-func errorWithUnknownFlags(
-    uniqFlagsNames []string,
-    listOfFlags []models.Flag,
-) (error)
-
-// convertReformStructToFlag дженерик
-// перобразуем []reform.Struct в []models.Models(./models/models.go)
-// models.Models - может быть только объектом, не указателем! 
-// проверяем какой к нам пришел T если is_ptr -> return err 
-// получаем тип указателя(reflect.TypeOf((*T)(nil))) для проверки объекта из ответа БД
-// в цикле 
-/*
-for _, f := range dataFromDB {
-    fVal := reflect.ValueOf(f)
-    if (Type of 'f' != expected ptr type ) {
-        return nil, err
-    }
-    flag := fVal.Elem().Interface().(T)
-    пишем флаг в массив
-}
-*/
-// все ok -> пишем флаги в кеш
-// return массив флагов
-func convertReformStructToFlag[T models.Models](dataFromDB []reform.Struct) ([]T,error)
 ```
 
 ### fiber, middleware/cache
@@ -264,7 +268,7 @@ func (sf *ServiceFlag) GetFlagByName(
     flagName string,
 ) (*entity.FlagResponse, error)
 
-// UpdateFlag - обвновление флага
+// UpdateFlag - обновление флага
 // идем в flag.UpdateFlag репозиторий c newFlag -> если ошибка, return err
 // делаем и возвращаем объект для ответ с данными флага из репозитория flag
 func (sf *ServiceFlag) UpdateFlag(

@@ -5,11 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"feature-flag-2/models"
-	"fmt"
 	"github.com/hashicorp/golang-lru/v2/expirable"
 	"gopkg.in/reform.v1"
-	"reflect"
-	"strings"
 )
 
 var (
@@ -17,15 +14,7 @@ var (
 
 	ErrDBNotFound = errors.New("not found")
 
-	ErrDBCreatedByIsNotEqual = errors.New("created_by from service is not equal created_by from base")
-
-	ErrDBFlagIsDeleted = errors.New("flag is deleted")
-
-	ErrDBInternal = errors.New("internal error")
-
-	ErrDBRUnexpectrdType = errors.New("unexpected type")
-
-	ErrDBUnknownFlag = errors.New("unknown flag")
+	ErrDBIsDeleted = errors.New("is deleted")
 )
 
 type RepoFlagDB struct {
@@ -58,7 +47,6 @@ func (r *RepoFlagDB) CreateFlag(ctx context.Context, newFlag models.Flag) error 
 			return err
 		}
 		r.cache.Remove(newFlag.FlagName)
-
 		return nil
 	}
 	if err := r.db.InTransactionContext(ctx, nil, exec); err != nil {
@@ -67,7 +55,6 @@ func (r *RepoFlagDB) CreateFlag(ctx context.Context, newFlag models.Flag) error 
 		}
 		return err
 	}
-
 	return nil
 }
 
@@ -87,7 +74,10 @@ func (r *RepoFlagDB) GetFlagByName(ctx context.Context, flagName string) (models
 }
 
 // Update обновляет флаг
-func (r *RepoFlagDB) UpdateFlag(ctx context.Context, newFlag models.Flag) error {
+func (r *RepoFlagDB) UpdateFlag(
+	ctx context.Context,
+	newFlag models.Flag,
+) (models.Flag, error) {
 	exec := func(tx *reform.TX) error {
 		var oldFlag models.Flag
 		if err := tx.WithContext(ctx).SelectOneTo(
@@ -100,11 +90,10 @@ func (r *RepoFlagDB) UpdateFlag(ctx context.Context, newFlag models.Flag) error 
 		return tx.WithContext(ctx).Update(&newFlag)
 	}
 	if err := r.db.InTransactionContext(ctx, nil, exec); err != nil {
-		return err
+		return newFlag, err
 	}
 	r.cache.Remove(newFlag.FlagName)
-
-	return nil
+	return newFlag, nil
 }
 
 // Delete удаляет флаг
@@ -119,7 +108,7 @@ func (r *RepoFlagDB) DeleteFlag(ctx context.Context, flagName string) error {
 			return err
 		}
 		if flagFromDB.IsDeleted {
-			return ErrDBNotFound
+			return ErrDBIsDeleted
 		}
 		flagFromDB.IsDeleted = true
 		return tx.WithContext(ctx).Update(&flagFromDB)
@@ -128,7 +117,6 @@ func (r *RepoFlagDB) DeleteFlag(ctx context.Context, flagName string) error {
 		return err
 	}
 	r.cache.Remove(flagName)
-
 	return nil
 }
 
@@ -138,16 +126,13 @@ func (r *RepoFlagDB) ListOfAllFlags(ctx context.Context) ([]models.Flag, error) 
 	if err != nil {
 		return nil, err
 	}
-
-	listOfFlags, err := convertReformStructToFlag[models.Flag](flags)
+	listOfFlags, err := models.ConvertReformStructToModel[models.Flag](flags)
 	if err != nil {
 		return nil, err
 	}
-
 	for _, flag := range listOfFlags {
 		r.cache.Add(flag.FlagName, flag)
 	}
-
 	return listOfFlags, nil
 }
 
@@ -157,7 +142,6 @@ func (r *RepoFlagDB) ListOfFlagByNames(
 ) ([]models.Flag, error) {
 	listOfFlags := make([]models.Flag, 0, len(flagNames))
 	findFlagsByNamesFromDB := make([]string, 0, len(flagNames))
-
 	for _, nameOfFlag := range flagNames {
 		if flag, ok := r.cache.Get(nameOfFlag); ok {
 			listOfFlags = append(listOfFlags, flag)
@@ -174,7 +158,7 @@ func (r *RepoFlagDB) ListOfFlagByNames(
 		if err != nil {
 			return nil, err
 		}
-		listOfFlagsFromDB, err := convertReformStructToFlag[models.Flag](flags)
+		listOfFlagsFromDB, err := models.ConvertReformStructToModel[models.Flag](flags)
 		if err != nil {
 			return nil, err
 		}
@@ -184,51 +168,10 @@ func (r *RepoFlagDB) ListOfFlagByNames(
 		return nil, ErrDBNotFound
 	}
 	if len(listOfFlags) != len(flagNames) {
-		return nil, errorWithUnknownFlags(flagNames, listOfFlags)
+		return nil, models.ErrorWithUnknownModelNames[models.Flag](flagNames, listOfFlags)
 	}
 	for _, flag := range listOfFlags {
 		r.cache.Add(flag.FlagName, flag)
-	}
-
-	return listOfFlags, nil
-}
-
-func errorWithUnknownFlags(
-	uniqFlagsNames []string,
-	listOfFlags []models.Flag,
-) error {
-	unknownFlags := []string{}
-link:
-	for _, flagName := range uniqFlagsNames {
-		for _, flag := range listOfFlags {
-			if flag.FlagName == flagName {
-				continue link
-			}
-		}
-		unknownFlags = append(unknownFlags, flagName)
-	}
-	return fmt.Errorf(
-		"error - {%v}, flagNames - {%s}",
-		ErrDBUnknownFlag,
-		strings.Join(unknownFlags, ", "),
-	)
-}
-
-// convertReformStructToFlag создаем массив флагов из []reform.Struct
-func convertReformStructToFlag[T models.Models](dataFromDB []reform.Struct) ([]T, error) {
-	var t T
-	if reflect.ValueOf(t).Kind() == reflect.Ptr {
-		return nil, models.ErrDBModelShouldNotBePointer
-	}
-	expectedPtrType := reflect.TypeOf((*T)(nil))
-	listOfFlags := make([]T, 0, len(dataFromDB))
-	for _, f := range dataFromDB {
-		fVal := reflect.ValueOf(f)
-		if fVal.Type() != expectedPtrType {
-			return nil, ErrDBRUnexpectrdType
-		}
-		flag := fVal.Elem().Interface().(T)
-		listOfFlags = append(listOfFlags, flag)
 	}
 	return listOfFlags, nil
 }
