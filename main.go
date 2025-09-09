@@ -8,7 +8,6 @@ import (
 	"feature-flag-2/entity"
 	_ "feature-flag-2/migrations"
 	"feature-flag-2/models"
-	mycache "feature-flag-2/repository/cache"
 	mydb "feature-flag-2/repository/db"
 	"feature-flag-2/service"
 	"flag"
@@ -85,9 +84,7 @@ func main() {
 	lru := expirable.NewLRU[string, models.Flag](1000, nil, 5*time.Minute)
 	reformDB := reform.NewDB(db, postgresql.Dialect, reform.NewPrintfLogger(log.Printf))
 	repoDB := mydb.NewRepoFlagDB(reformDB, lru)
-
-	repoCache := mycache.NewRepoCacheFlag(lru)
-	serviceFlag := service.NewServiceFlag(repoDB, repoCache)
+	serviceFlag := service.NewServiceFlag(repoDB)
 
 	// Create a new Fiber app
 	app := fiber.New()
@@ -97,22 +94,7 @@ func main() {
 		Methods:      []string{"GET"},
 	})
 	app.Group("/flags").Use(fcache)
-
 	api := humafiberv3.New(app, huma.DefaultConfig("feature Flags API", "1.0.0"))
-
-	huma.Register(api, huma.Operation{
-		OperationID: "get-list-of-flags",
-		Method:      "PUT",
-		Path:        "/flags/migrations",
-		Summary:     "get list of flags and cached",
-	}, func(ctx context.Context, input *struct{}) (*entity.ListOfFlagResponse, error) {
-		flags, err := serviceFlag.RetrieveListOfAllFlags(ctx)
-		if err != nil {
-			return nil, huma.Error404NotFound("empty list of flags", err)
-		}
-
-		return flags, nil
-	})
 
 	huma.Register(api, huma.Operation{
 		OperationID: "get-list-of-flags",
@@ -124,7 +106,6 @@ func main() {
 		if err != nil {
 			return nil, huma.Error404NotFound("empty list of flags", err)
 		}
-
 		return flags, nil
 	})
 
@@ -132,7 +113,7 @@ func main() {
 		OperationID: "post-list-of-flags",
 		Method:      "POST",
 		Path:        "/flags",
-		Summary:     "get list of flags by names and cached",
+		Summary:     "get list of flags by names",
 	}, func(ctx context.Context, input *struct {
 		Body entity.FlagNamesDecode `json:"body"`
 	}) (*entity.ListOfFlagResponse, error) {
@@ -181,10 +162,10 @@ func main() {
 	})
 
 	huma.Register(api, huma.Operation{
-		OperationID: "put-update-flag-by-name",
+		OperationID: "put-flag-by-name",
 		Method:      "PUT",
 		Path:        "/flag/{name}",
-		Summary:     "get flag name from param and return flag",
+		Summary:     "get flag name from param and return flag after update",
 	}, func(ctx context.Context, input *struct {
 		Name string      `path:"name"`
 		Body models.Flag `json:"body"`
@@ -206,7 +187,7 @@ func main() {
 		OperationID: "delete-flag-by-name",
 		Method:      "DELETE",
 		Path:        "/flag/{name}",
-		Summary:     "get flag name from param and return flag",
+		Summary:     "get flag name from param and delete",
 	}, func(ctx context.Context, input *struct {
 		Name string `path:"name"`
 	}) (*struct{}, error) {

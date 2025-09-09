@@ -67,8 +67,8 @@ curl -X POST \
   -H 'Content-Type: application/json' \
   -d '{
     "flag_names": [
-      "2feature_new_ui",
-      "feature_new_ui1"      
+      "feature_new_ui123",
+      "feature_new_ui"      
     ]
   }'
 ```

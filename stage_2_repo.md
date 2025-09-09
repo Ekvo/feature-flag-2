@@ -2,12 +2,13 @@
 
 ## Этап разработки репозиториев, маршрутизатора, адаптера humafiber для fiber/v3.
 
-### SQL БД работаем через ORM
+### SQL БД работаем через ORM c cache
 * Задача - хранение данных флагов
 
 * PostgreSQL
 * gopkg.in/reform.v1 -> ORM
 * jackc/pgx v3.6.2   -> драйвер
+* golang-lru/v2
 
 
 **Модель флага для команды:** `go generate`
@@ -24,6 +25,21 @@ type Flag struct {
     CreatedAt   time.Time `json:"created_at" reform:"created_at"`
     UpdatedAt   time.Time `json:"updated_at" reform:"updated_at"`
 }
+
+// JSONmap работа SQL с map 
+type JSONmap map[string]any
+
+// map в []byte для sql формат
+func (jm JSONmap) Value() (driver.Value, error)
+
+// из sql данных []byte в map 
+func (jm *JSONmap) Scan(value any) error
+
+// Models сущности для дженериков, при приобразовании данных из БД в определнный тип
+type Models interface {
+    Flag
+}
+
 ```
 
 **Репозитори БД и методы**
@@ -40,7 +56,9 @@ func NewRepoFlagDB(
 ) *RepoFlagDB
 
 // CreateFlag создает новый флаг
-// подводные камни: мы должны создавть флаг даже если он сущесвует в базе -> со статусом (is_deleted = true)
+// подводные камни:
+// мы должны создавть флаг даже если он сущесвует в базе -> со статусом (is_deleted = true)
+// если флаг есть, надо залочить строку (FOR UPDATE)
 // создаем функию exec для транзакции (reform.DB.InTransactionContext)
 /*
 exec := func(tx *reform.TX) error{
@@ -60,60 +78,106 @@ exec := func(tx *reform.TX) error{
 func (rb *RepoFlag) CreateFlag(ctx context.Context, flag models.Flag) error
 
 // GetByFlagName возвращает флаг по имени
-// идем в кеш, нашли -> return  флаг
+// идем в кеш, нашли -> return флаг
 // сетаем имя флага в пустой флаг из кеша, идем reform.Querier.FindByPrimaryKeyTo
+// если нет ошибок -> пишем в кеш
+// все ok -> return flag, nil
 func (rb *RepoFlag) GetFlagByName(ctx context.Context, flagName string) (models.Flag, error)
 
 // UpdateFlag обновляет флаг
-// обертка для функции reform.Querier.Update
+// подводные камни:
+// если флаг есть, надо залочить строку (FOR UPDATE)
+// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+/*
+   exec := func(tx *reform.TX) error{
+       var oldFlag models.Flag
+       идем в базу tx.WithContext(ctx).SelectOneTo  с tail = WHERE is_deleted = false AND flag_name = $1 FOR UPDATE
+       если ошибка -> возвращаем ошибку
+       или мы НАШЛИ флаг
+       Здесь в будушем нужно будет провалидировать даные (например: сравнить время создания, uuid createdBy)
+       производим полное обновление флага ->
+       return tx.WithContext(ctx).Update(&newFlag)
+    }
+*/
+// вызываем InTransactionContext(ctx, nil, exec)
+// если ошибка -> возвращаем ошибку
+// все ok -> удаляем флаг из кеш
+// return nil
 func (rb *RepoFlag) UpdateFlag(ctx context.Context, flag models.Flag) error
 
-// Deleteflag удаляет флаг
-// обертка для функции reform.Querier.Delete
+// DeleteFlag обновляет флаг
+// подводные камни:
+// 1. мы должны поменять статус в таблице is_deleted на true, при условии что флаг есть и is_deleted = false
+// 2. если флаг есть, надо залочить строку (FOR UPDATE)
+// создаем функию exec для транзакции (reform.DB.InTransactionContext)
+/*
+   exec := func(tx *reform.TX) error{
+       var flagFromDB models.Flag
+       идем в базу tx.WithContext(ctx).SelectOneTo  с tail = WHERE flag_name = $1 FOR UPDATE
+       если ошибка -> возвращаем ошибку
+       или мы НАШЛИ флаг
+       if flagFromDB.IsDeleted  -> return Err Not Found
+       flagFromDB.IsDeleted = true и делаем обновление    
+       return tx.WithContext(ctx).Update(&flagFromDB)
+    }
+*/
+// вызываем InTransactionContext(ctx, nil, exec)
+// если ошибка -> возвращаем ошибку
+// все ok -> удаляем флаг из кеш
+// return nil
 func (rb *RepoFlag) DeleteFlag(ctx context.Context, flagName string) error
 
 // ListOfAllFkags возвращает список всех флагов
 // вызываем reform.Querier.SelectAllFrom(models.FlagTable,"")
-// вызываем 'convertReformStructToFlag'
-func (rb *RepoFlag) ListOfAllFkags(ctx context.Context) ([]models.Flag, error)
+// вызываем 'convertReformStructToFlag[model.Flag]'
+// если ошибка -> возвращаем ошибку
+// все ok -> пишем флаги в кеш
+// return массив флагов
+func (rb *RepoFlag) ListOfAllFlags(ctx context.Context) ([]models.Flag, error)
 
-//  ListOfFkagByNames возвращает список всех флагов
+// ListOfFkagByNames возвращает список флагов по списку имен
+// делаем массивы для ответа(listOfFlags), и массив с именами для запроса в БД(findFlagsByNamesFromDB)
+// идем в кеш и в цикле по имена флагов -> если есть пишем в listOfFlags, если нет пишем имя флага в findFlagsByNamesFromDB
+// длина findFlagsByNamesFromDB > 0 -> идем в БД  -> если ошибка return err
 // преобразовываем falgNames []string в []any 
 // вызываем reform.Querier.Delete.FindAllFrom9(models.FlagTable, "flag_name", args...)
-// вызываем 'convertReformStructToFlag'
+// если ошибка return err
+// вызываем 'convertReformStructToFlag[T]'
+// если ошибка return err
+// объекдиняем данные из кеш и базы
+// длина полученого списка(listOfFlags) == 0, делаем ошибку (Not found)
+// if len(listOfFlags) != len(flagNames), т.е. у нас есть unknown flags -> делаем ошибку в 'errorWithUnknownFlags'
+// все ok -> пишем флаги в кеш
+// return массив флагов
 func (rb *RepoFlag) ListOfFkagByNames(ctx context.Context, flagNames []string) ([]models.Flag, error)
 
-// convertReformStructToFlag перобразуем []reform.Struct в []models.Flag
-// создаем слайс listOfFlags, заполняем его проходя в цикле по dataFromDB
-func convertReformStructToFlag(dataFromDB []reform.Struct) []models.Flag
-```
+// errorWithUnknownFlag длаем ошибку с именами флагов
+// for uniqFlagsNames { for listOfFlags { пишем в массив имена unknownFlags } }
+// делаем fmt.Errorf("error - {%v}, flagNames - {%s}") - в шаблон добаляем: костомную ошибку с описанием и строку "alien1, alien2"
+func errorWithUnknownFlags(
+    uniqFlagsNames []string,
+    listOfFlags []models.Flag,
+) (error)
 
-### Cache для Service слоя
-* Задача - хранение данных флагов в кеш, уменьшить частоту запросов в БД
-
-* golang-lru/v2 
-
-```go
-type RepoCacheFlag struct {
-	cache *expirable.LRU[string, models.Flag]
+// convertReformStructToFlag дженерик
+// перобразуем []reform.Struct в []models.Models(./models/models.go)
+// models.Models - может быть только объектом, не указателем! 
+// проверяем какой к нам пришел T если is_ptr -> return err 
+// получаем тип указателя(reflect.TypeOf((*T)(nil))) для проверки объекта из ответа БД
+// в цикле 
+/*
+for _, f := range dataFromDB {
+    fVal := reflect.ValueOf(f)
+    if (Type of 'f' != expected ptr type ) {
+        return nil, err
+    }
+    flag := fVal.Elem().Interface().(T)
+    пишем флаг в массив
 }
-
-// NewRepoCacheFlag конструктор
-// можно будет создавать с заполненным кешом
-// так у нас будет возможность получить кол-во данных из БД, и задать размер *expirable.LRU[string, models.Flag]
-func NewRepoCacheFlag(cache *expirable.LRU[string, models.Flag]) *RepoCacheFlag
-
-// AddFlag добавить флаг в кеш
-// обертка для expirable.LRU.Add
-func (rc *RepoCacheFlag) AddFlag(flag models.Flag)
-
-// RemoveFlag удалить флаг из кеш
-// обертка для expirable.LRU.Remove
-func (rc *RepoCacheFlag) RemoveFlag(flagName string)
-
-// RemoveFlag получить флаг из кеш по имени фага
-// обертка для expirable.LRU.Get
-func (rc *RepoCacheFlag) GetFlagByName(flagName string) (models.Flag, bool)
+*/
+// все ok -> пишем флаги в кеш
+// return массив флагов
+func convertReformStructToFlag[T models.Models](dataFromDB []reform.Struct) ([]T,error)
 ```
 
 ### fiber, middleware/cache
@@ -179,71 +243,51 @@ type FlagNamesDecode struct {
 // при запросах на получение models.Flag пишем в кеш
 type ServiceFlag struct {
 	repoDB    *db.RepoFlagDB
-	repoCache *cache.RepoCacheFlag
 }
 
 // NewServiceFlag - конструктор
-func NewServiceFlag(db *db.RepoFlagDB, cache *cache.RepoCacheFlag) *ServiceFlag
+func NewServiceFlag(db *db.RepoFlagDB) *ServiceFlag
 
 // CreateNewFlag - создания флага
-// идем в кеш, если есть возвращаем ошибку (Already Exists)
-// если нет -> идем в БД  -> если ошибка делаем (Already Exists) - (нужно потом писать в логи сами ошибки)
-// если все ok -> делаем и возвращаем ответ с данными созданного флага
+// если нет -> идем в репозиторий flag.CreateFlag передаем newFlag  -> если ошибка, return err
+// если все ok -> делаем и возвращаем ответ с данными из flag репозитория 
 func (sf *ServiceFlag) CreateNewFlag(
     ctx context.Context,
-    flag models.Flag,
-) (*entity.FlagResponse, error)
+    newFlag models.Flag,
+) (*entity.FlagResponse, error) {
 
 // GetFlagByName - получение флага
-// идем в кеш, если есть делаем и возвращаем объект для ответа
-// если нет -> идем в БД  -> если ошибка делаем (Not found)
-// если все ok -> пишем флаг в кеш
-// делаем и возвращаем объект дл ответ с данными флага из БД 
+// идем в flag.GetFlagByName репозиторий c flagName -> если ошибка, return err
+// делаем и возвращаем объект для ответ с данными флага из репозитория flag
 func (sf *ServiceFlag) GetFlagByName(
     ctx context.Context,
     flagName string,
 ) (*entity.FlagResponse, error)
 
 // UpdateFlag - обвновление флага
-// идем в кеш, если есть, берем старый флаг
-// если нет -> идем в БД  -> если ошибка делаем (Not found)
-// сравниваем время создания и создателя флага в новых и старых данных
-// если не равны -> делаем (кастомная ошибка)
-// если все ok -> пишем флаг в БД -> если ошибка делаем (Internal)
-// удаляем флаг из кеш
-// делаем и возвращаем объект для ответа с данными нового флага 
+// идем в flag.UpdateFlag репозиторий c newFlag -> если ошибка, return err
+// делаем и возвращаем объект для ответ с данными флага из репозитория flag
 func (sf *ServiceFlag) UpdateFlag(
     ctx context.Context,
     newFlag models.Flag,
 ) (*entity.FlagResponse, error)
 
 // DeleteFlag - удаление флага
-// идем в БД  -> если ошибка делаем (Not found)
-// удаляем флаг из кеш 
+// идем в flag.DeleteFlag репозиторий с именем флага -> если ошибка, return err
+// return nil
 func (sf *ServiceFlag) DeleteFlag(
     ctx context.Context,
     flagName string,
 ) (error)
 
 // RetrieveListOfAllFlags - получение всех флагов
-// идем в БД  -> если ошибка делаем (Internal)
-// длина полученного списка == 0, делаем ошибку (Mot found)
-// пишем флаги в кеш
+// идем в flag.ListOfAllFlags репозиторий -> если ошибка, return err
 // делаем и возвращаем объект для ответ с данными флагов
 func (sf *ServiceFlag) RetrieveListOfAllFlags(ctx context.Context) (*entity.ListOfFlagResponse, error)
 
 // RetrieveListOfAllFlags - получение флагов по списку имен
-// создаем uniqFlagsNames := make(map[string]struct{}) - отсекает дубликаты
-// делаем массивы для ответа(listOfFlags), и массив с именами для запроса в БД(findFlagsByNamesFromDB)
-// идем в кеш и в цикле по имена флагов -> если есть пишем listOfFlags, если нет пишем имя флага в findFlagsByNamesFromDB
-
-// длина findFlagsByNamesFromDB > 0 -> идем в БД  -> если ошибка делаем (Internal)
-// длина полученого списка(listOfFlags) == 0, делаем ошибку (Not found)
-
-// len(listOfFlags) != len(uniqFlagsNames)  -> есть unknown флаги
-// делаем список имен неизвестных флагов -> делаем ошибку со списком unknown флагов
-
-// все хорошо -> пишем флаги в кеш
+// делаем массив с уникальными именами utils.UniqWords (./utils/utils.go)
+// идем в flag.ListOfFlagByNames репозиторий -> если ошибка, return err
 // делаем и возвращаем объект для ответа с данными флагов
 func (sf *ServiceFlag) RetrieveListOfFlagsByNames(
     ctx context.Context,
@@ -260,7 +304,7 @@ func (sf *ServiceFlag) RetrieveListOfFlagsByNames(
 // работаем с флагами через service.ServiceFlag
 api := humafiberv3.New(app, huma.DefaultConfig("Feature Flags API", "1.0.0"))
 
-// Контракт для получения полного списка флагов
+// Контроллер для получения полного списка флагов
 
 // получаем список флагов через service.RetrieveListOfAllFlags 
 // если ошибка делаем huma.Error404NotFound
@@ -270,9 +314,9 @@ huma.Register(api, huma.Operation{
     Method:      "GET",
     Path:        "/flags",
     Summary:     "get list of flags and cached",
-}, func (ctx context.Context, input *struct{}) (*entity.ListOfFlagResponse, error)
+}, func(ctx context.Context, input *struct{}) (*entity.ListOfFlagResponse, error)
 
-// Контракт для получения списка флагов по именам
+// Контроллер получения списка флагов по именам
 
 // получаем имена флагов через input.Body
 // идем в service.RetrieveListOfFlagsByNames со списком имен 
@@ -282,12 +326,12 @@ huma.Register(api, huma.Operation{
     OperationID: "post-list-of-flags",
     Method:      "POST",
     Path:        "/flags",
-    Summary:     "get list of flags by names and cached",
+    Summary:     "get list of flags by names",
 }, func(ctx context.Context, input *struct {
     Body entity.FlagNamesDecode `json:"body"`
-}) (*entity.ListOfFlagResponse, error)
+}) (*entity.ListOfFlagResponse, error) {
 
-// Контракт для создания флага
+// Контроллер создания флага
 
 // получаем флаг через input.Body
 // идем в service.CreateNewFlag с полученным флагом
@@ -303,7 +347,7 @@ huma.Register(api, huma.Operation{
     Body models.Flag `json:"body"`
 }) (*entity.FlagResponse, error)
 
-// Контракт для получения флага по имени 
+// Контроллер получения флага по имени 
 
 // получаем имя флага из параметра
 // идем в service.GetFlagByName с полученным именем флага
@@ -318,7 +362,7 @@ huma.Register(api, huma.Operation{
     Name string `path:"name" maxLength:"30" example:"world"`
 }) (*entity.FlagResponse, error)
 
-// Контракт для изменения флага по имени 
+// Контроллер для изменения флага по имени 
 
 // получаем имя флага из параметра и сам флаг 
 // сравниваем имя из параметра и имя из объекта флага
@@ -327,29 +371,29 @@ huma.Register(api, huma.Operation{
 // если ошибка делаем huma.Error404NotFound
 // все хорошо отдаем ответ полученный из сервисного слоя (обвноленный флаг)
 huma.Register(api, huma.Operation{
-    OperationID: "get-flag-by-name",
+    OperationID: "put-flag-by-name",
     Method:      "PUT",
     Path:        "/flag/{name}",
-    Summary:     "get flag name from param and return flag",
+    Summary:     "get flag name from param and return flag after update",
 }, func(ctx context.Context, input *struct {
     Name string      `path:"name"`
     Body models.Flag `json:"body"`
 }) (*entity.FlagResponse, error)
 
-// Контракт для удаления флага по имени 
+// Контроллер для удаления флага по имени 
 
 // получаем имя флага из параметра
 // идем в service.DeleteFlag с полученным флагом и пытаемся удалить
 // если ошибка делаем huma.Error404NotFound
 // все хорошо отдаем nil
 huma.Register(api, huma.Operation{
-    OperationID: "get-flag-by-name",
+    OperationID: "delete-flag-by-name",
     Method:      "DELETE",
     Path:        "/flag/{name}",
-    Summary:     "get flag name from param and return flag",
+    Summary:     "get flag name from param and delete",
 }, func(ctx context.Context, input *struct {
     Name string `path:"name"`
-}) (*struct{}, error)
+}) (*struct{}, error) 
 ```
 
 ### humafiberv3 
